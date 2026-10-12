@@ -25,6 +25,7 @@ server/data/*.db-wal
 server/public/audio/*.mp3
 server/public/audio/*.flac
 server/public/audio/*.wav
+server/public/audio/*.abc
 server/public/audio/*/
 !server/public/audio/.gitkeep
 

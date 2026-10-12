@@ -50,7 +50,15 @@ export function fromISODate(str: string | null | undefined): Date | null {
 
 // Transaction helper
 export function transaction<T>(fn: () => T): T {
-  return db.transaction(fn)();
+  db.exec('BEGIN');
+  try {
+    const result = fn();
+    db.exec('COMMIT');
+    return result;
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
 }
 
 // Batch insert helper
@@ -64,13 +72,11 @@ export function batchInsert(
     `INSERT INTO ${table} (${columns.join(', ')}) VALUES (${placeholders})`
   );
 
-  const insertMany = db.transaction((items: unknown[][]) => {
-    for (const row of items) {
-      stmt.run(...row);
+  transaction(() => {
+    for (const row of rows) {
+      stmt.run(...(row as any[]));
     }
   });
-
-  insertMany(rows);
 }
 
 export { db };

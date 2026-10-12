@@ -1,4 +1,4 @@
-import Database from 'better-sqlite3';
+import { DatabaseSync } from 'node:sqlite';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
@@ -16,10 +16,11 @@ try {
   // Directory already exists
 }
 
-const dbInstance = new Database(config.database.path);
-dbInstance.pragma('journal_mode = WAL');
-dbInstance.pragma('foreign_keys = ON');
-dbInstance.pragma('busy_timeout = 5000');
+// Node's built-in SQLite (better-sqlite3 crashes Node 24 during GC of prepared statements)
+const dbInstance = new DatabaseSync(config.database.path);
+dbInstance.exec('PRAGMA journal_mode = WAL');
+dbInstance.exec('PRAGMA foreign_keys = ON');
+dbInstance.exec('PRAGMA busy_timeout = 5000');
 
 export { dbInstance as db };
 
@@ -46,7 +47,7 @@ interface QueryResult {
 }
 
 // Convert SQL and execute
-function executeQuery(sql: string, params?: unknown[], dbRef: Database.Database = dbInstance): QueryResult {
+function executeQuery(sql: string, params?: unknown[], dbRef: DatabaseSync = dbInstance): QueryResult {
   // Sanitize parameters for SQLite
   const sanitizedParams = sanitizeParams(params);
 
@@ -96,12 +97,12 @@ function executeQuery(sql: string, params?: unknown[], dbRef: Database.Database 
 
     if (isSelect || convertedSql.includes('RETURNING')) {
       const stmt = dbRef.prepare(convertedSql);
-      const rows = sanitizedParams ? stmt.all(...sanitizedParams) : stmt.all();
+      const rows = (sanitizedParams ? stmt.all(...(sanitizedParams as any[])) : stmt.all()) as any[];
       return { rows, rowCount: rows.length };
     } else {
       const stmt = dbRef.prepare(convertedSql);
-      const result = sanitizedParams ? stmt.run(...sanitizedParams) : stmt.run();
-      return { rows: [], rowCount: result.changes };
+      const result = sanitizedParams ? stmt.run(...(sanitizedParams as any[])) : stmt.run();
+      return { rows: [], rowCount: Number(result.changes) };
     }
   } catch (error) {
     console.error('SQLite query error:', error);

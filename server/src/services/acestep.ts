@@ -21,6 +21,7 @@ function getAudioDuration(filePath: string): number {
 import { fileURLToPath } from 'url';
 import { config } from '../config/index.js';
 import { getGradioClient, resetGradioClient, isGradioAvailable } from './gradio-client.js';
+import { writeLyrics, type WrittenLyrics } from './lyricsWriter.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -75,6 +76,13 @@ export function resolvePythonPath(baseDir: string): string {
 const ACESTEP_DIR = resolveAceStepPath();
 const SCRIPTS_DIR = path.join(__dirname, '../../scripts');
 const PYTHON_SCRIPT = path.join(SCRIPTS_DIR, 'simple_generate.py');
+
+// YuE2 (MLX) engine — the default. Set MUSIC_ENGINE=acestep to use the original ACE-Step backend.
+export const MUSIC_ENGINE = (process.env.MUSIC_ENGINE || 'yue2').toLowerCase();
+export const YUE2_DIR = process.env.YUE2_PATH || path.join(process.env.HOME || '', 'Code/AI/yue2-mlx');
+const YUE2_PYTHON = path.join(YUE2_DIR, '.venv/bin/python');
+const YUE2_JOB_SCRIPT = path.join(YUE2_DIR, 'yue2_job.py');
+export const isYue2Engine = () => MUSIC_ENGINE === 'yue2';
 
 // ---------------------------------------------------------------------------
 // Gradio generation: map params to the 51 positional args for /generation_wrapper
@@ -327,6 +335,9 @@ export interface GenerationParams {
 interface GenerationResult {
   audioUrls: string[];
   duration: number;
+  lyrics?: string;
+  style?: string;
+  title?: string;
   bpm?: number;
   keyScale?: string;
   timeSignature?: string;
@@ -355,6 +366,7 @@ interface ActiveJob {
   queuePosition?: number;
   progress?: number;
   stage?: string;
+  writtenLyrics?: WrittenLyrics;
 }
 
 const activeJobs = new Map<string, ActiveJob>();
@@ -368,6 +380,7 @@ let isProcessingQueue = false;
 
 // Health check - verify Gradio app is reachable
 export async function checkSpaceHealth(): Promise<boolean> {
+  if (isYue2Engine()) return existsSync(YUE2_PYTHON) && existsSync(YUE2_JOB_SCRIPT);
   return isGradioAvailable();
 }
 
@@ -488,6 +501,11 @@ async function processGeneration(
   if ((params.taskType === 'cover' || params.taskType === 'audio2audio') && !params.sourceAudioUrl && !params.audioCodes) {
     job.status = 'failed';
     job.error = `task_type='${params.taskType}' requires a source audio or audio codes`;
+    return;
+  }
+
+  if (isYue2Engine()) {
+    await processGenerationViaYue2(jobId, params, job);
     return;
   }
 
@@ -776,6 +794,144 @@ async function processGenerationViaPython(
   }
 }
 
+// ---------------------------------------------------------------------------
+// YuE2 (MLX) generation — spawns yue2_job.py in the yue2-mlx venv
+// ---------------------------------------------------------------------------
+
+async function processGenerationViaYue2(
+  jobId: string,
+  params: GenerationParams,
+  job: ActiveJob,
+): Promise<void> {
+  const jobOutputDir = path.join(YUE2_DIR, 'out', 'ui-jobs', jobId);
+  try {
+    await mkdir(jobOutputDir, { recursive: true });
+
+    let lyrics = params.instrumental ? '' : (params.lyrics || '');
+    let style = params.style || '';
+    if (!params.customMode && params.songDescription) {
+      // Simple mode: the description is a story/idea — have Claude turn it into tagged lyrics + style
+      if (!lyrics.trim() && !params.instrumental) {
+        job.stage = 'Writing lyrics...';
+        const written = await writeLyrics({ idea: params.songDescription, language: params.vocalLanguage });
+        lyrics = written.lyrics;
+        style = style || written.style;
+        job.writtenLyrics = written;
+      } else {
+        style = style || params.songDescription;
+      }
+    }
+
+    const isCover = (params.taskType === 'cover' || params.taskType === 'audio2audio') && !!params.sourceAudioUrl;
+    if (params.taskType === 'repaint') {
+      throw new Error('Repaint is not supported by YuE2 — use Cover, or regenerate with a different seed');
+    }
+
+    const args = [
+      YUE2_JOB_SCRIPT,
+      '--style', style || 'pop',
+      '--output-dir', jobOutputDir,
+      '--batch-size', String(params.batchSize ?? 1),
+    ];
+    if (lyrics) args.push('--lyrics', lyrics);
+    if (params.instrumental) args.push('--instrumental');
+    if (params.vocalLanguage && params.vocalLanguage !== 'unknown') args.push('--vocal-language', params.vocalLanguage);
+    if (params.duration && params.duration > 0) args.push('--duration', String(params.duration));
+    if (params.seed !== undefined && params.seed >= 0 && !params.randomSeed) args.push('--seed', String(params.seed));
+    if (isCover) {
+      args.push('--src-audio', resolveAudioPath(params.sourceAudioUrl!));
+      // Strength ≥ 0.5 keeps melody + structure ("close"); below that only the vocal melody ("free")
+      args.push('--cover-mode', (params.audioCoverStrength ?? 1.0) >= 0.5 ? 'close' : 'free');
+    }
+
+    job.stage = isCover ? 'Transcribing melody...' : 'Loading YuE2...';
+    const result = await runYue2(args, job);
+    if (!result.success) throw new Error(result.error || 'YuE2 generation failed');
+    if (!result.audio_paths?.length) throw new Error('No audio files generated');
+
+    await mkdir(AUDIO_DIR, { recursive: true });
+    const audioUrls: string[] = [];
+    for (const [i, srcPath] of result.audio_paths.entries()) {
+      const filename = `${jobId}_${i}.mp3`;
+      await copyFile(srcPath, path.join(AUDIO_DIR, filename));
+      // Keep the score next to the song so it can be edited and re-rendered later
+      const abcSrc = result.abc_paths?.[i];
+      if (abcSrc && existsSync(abcSrc)) await copyFile(abcSrc, path.join(AUDIO_DIR, `${jobId}_${i}.abc`));
+      audioUrls.push(`/audio/${filename}`);
+    }
+
+    job.status = 'succeeded';
+    job.result = {
+      audioUrls,
+      duration: Math.round(result.durations?.[0] ?? getAudioDuration(path.join(AUDIO_DIR, `${jobId}_0.mp3`))),
+      lyrics: job.writtenLyrics?.lyrics,
+      style: job.writtenLyrics ? style : undefined,
+      title: job.writtenLyrics?.title,
+      status: 'succeeded',
+    };
+    job.rawResponse = result;
+    console.log(`Job ${jobId}: Completed via YuE2 in ${result.elapsed_seconds?.toFixed(1)}s with ${audioUrls.length} audio files`);
+  } catch (error) {
+    console.error(`Job ${jobId}: YuE2 generation failed`, error);
+    job.status = 'failed';
+    job.error = error instanceof Error ? error.message : 'Generation failed';
+  } finally {
+    await rm(jobOutputDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+interface Yue2Result {
+  success: boolean;
+  audio_paths?: string[];
+  abc_paths?: string[];
+  durations?: number[];
+  seeds?: number[];
+  elapsed_seconds?: number;
+  error?: string;
+}
+
+function runYue2(scriptArgs: string[], job: ActiveJob, timeoutMs = 1800000): Promise<Yue2Result> {
+  return new Promise((resolve) => {
+    const proc = spawn(YUE2_PYTHON, scriptArgs, { cwd: YUE2_DIR });
+    const timer = setTimeout(() => {
+      proc.kill('SIGTERM');
+      resolve({ success: false, error: `Generation timed out after ${timeoutMs / 1000}s` });
+    }, timeoutMs);
+
+    let stdout = '';
+    let stderrTail = '';
+    proc.stdout.on('data', (data) => { stdout += data.toString(); });
+    proc.stderr.on('data', (data) => {
+      const text = data.toString();
+      stderrTail = (stderrTail + text).slice(-4000);
+      for (const line of text.split('\n')) {
+        const m = line.match(/^\[progress\] ([\d.]+) (.*)$/);
+        if (m) {
+          job.progress = Math.round(parseFloat(m[1]) * 100);
+          job.stage = m[2];
+        } else if (line.trim()) {
+          console.log(`[YuE2] ${line}`);
+        }
+      }
+    });
+    proc.on('close', (code) => {
+      clearTimeout(timer);
+      const jsonLine = stdout.split('\n').reverse().find(l => l.trim().startsWith('{'));
+      if (jsonLine) {
+        try {
+          resolve(JSON.parse(jsonLine));
+          return;
+        } catch { /* fall through */ }
+      }
+      resolve({ success: false, error: code === 0 ? 'No JSON output from YuE2' : stderrTail || `YuE2 exited with code ${code}` });
+    });
+    proc.on('error', (err) => {
+      clearTimeout(timer);
+      resolve({ success: false, error: err.message });
+    });
+  });
+}
+
 interface PythonResult {
   success: boolean;
   audio_paths?: string[];
@@ -891,7 +1047,7 @@ export async function getJobStatus(jobId: string): Promise<JobStatus> {
   // Running — Gradio handles its own queue, we just report estimated time
   return {
     status: job.status,
-    etaSeconds: Math.max(0, 180 - elapsed),
+    etaSeconds: Math.max(0, (isYue2Engine() ? 90 : 180) - elapsed),
     progress: job.progress,
     stage: job.stage,
   };

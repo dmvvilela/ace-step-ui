@@ -17,7 +17,22 @@ import {
   getJobRawResponse,
   downloadAudioToBuffer,
   resolvePythonPath,
+  isYue2Engine,
 } from '../services/acestep.js';
+import { writeLyrics } from '../services/lyricsWriter.js';
+
+const YUE2_MODEL_NAME = 'yue2-3b-mlx-8bit';
+
+const RANDOM_IDEAS = [
+  'Our friend who swears every Monday that the diet starts today, and is eating pastel by Tuesday',
+  'The guy who always says "5 minutes away" while still in the shower',
+  'The friend who brings a guitar to every party and only knows Wonderwall',
+  'The group chat legend who sends 40 audio messages instead of one text',
+  'The friend who got lost driving with GPS on, three times, to the same bar',
+  'The one who borrowed a phone charger in 2019 and never gave it back',
+  'The friend who becomes a professional DJ after two beers',
+  'The cousin who explains crypto at every family barbecue',
+];
 import { getStorageProvider } from '../services/storage/factory.js';
 
 const router = Router();
@@ -421,7 +436,7 @@ router.get('/status/:jobId', authMiddleware, async (req: AuthenticatedRequest, r
             for (let i = 0; i < audioUrls.length; i++) {
               const audioUrl = audioUrls[i];
               const variationSuffix = audioUrls.length > 1 ? ` (v${i + 1})` : '';
-              const songTitle = autoTitle(params) + variationSuffix;
+              const songTitle = (aceStatus.result.title || autoTitle(params)) + variationSuffix;
 
               const songId = generateUUID();
 
@@ -441,9 +456,9 @@ router.get('/status/:jobId', authMiddleware, async (req: AuthenticatedRequest, r
                     songId,
                     req.user!.id,
                     songTitle,
-                    params.instrumental ? '[Instrumental]' : params.lyrics,
-                    params.style,
-                    params.style,
+                    params.instrumental ? '[Instrumental]' : (aceStatus.result.lyrics || params.lyrics),
+                    (aceStatus.result.style || params.style),
+                    (aceStatus.result.style || params.style),
                     storedPath,
                     aceStatus.result.duration && aceStatus.result.duration > 0 ? aceStatus.result.duration : (params.duration && params.duration > 0 ? params.duration : 0),
                     aceStatus.result.bpm || params.bpm,
@@ -467,9 +482,9 @@ router.get('/status/:jobId', authMiddleware, async (req: AuthenticatedRequest, r
                     songId,
                     req.user!.id,
                     songTitle,
-                    params.instrumental ? '[Instrumental]' : params.lyrics,
-                    params.style,
-                    params.style,
+                    params.instrumental ? '[Instrumental]' : (aceStatus.result.lyrics || params.lyrics),
+                    (aceStatus.result.style || params.style),
+                    (aceStatus.result.style || params.style),
                     audioUrl,
                     aceStatus.result.duration && aceStatus.result.duration > 0 ? aceStatus.result.duration : (params.duration && params.duration > 0 ? params.duration : 0),
                     aceStatus.result.bpm || params.bpm,
@@ -597,6 +612,10 @@ router.get('/endpoints', authMiddleware, async (_req: AuthenticatedRequest, res:
 });
 
 router.get('/models', async (_req, res: Response) => {
+  if (isYue2Engine()) {
+    res.json({ models: [{ name: YUE2_MODEL_NAME, is_active: true, is_preloaded: true }] });
+    return;
+  }
   try {
     const ACESTEP_DIR = process.env.ACESTEP_PATH || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../ACE-Step-1.5');
     const checkpointsDir = path.join(ACESTEP_DIR, 'checkpoints');
@@ -677,6 +696,10 @@ router.get('/models', async (_req, res: Response) => {
 
 // GET /api/generate/random-description — Load a random simple description from Gradio
 router.get('/random-description', authMiddleware, async (_req: AuthenticatedRequest, res: Response) => {
+  if (isYue2Engine()) {
+    res.json({ description: RANDOM_IDEAS[Math.floor(Math.random() * RANDOM_IDEAS.length)], instrumental: false, vocalLanguage: 'unknown' });
+    return;
+  }
   try {
     const client = await getGradioClient();
     const result = await client.predict('/load_random_simple_description', []);
@@ -703,6 +726,11 @@ router.get('/health', async (_req, res: Response) => {
 });
 
 router.get('/limits', async (_req, res: Response) => {
+  if (isYue2Engine()) {
+    // YuE2 has no hard cap; 6 minutes keeps generation time and memory reasonable
+    res.json({ max_duration_with_lm: 360, max_duration_without_lm: 360 });
+    return;
+  }
   try {
     const { spawn } = await import('child_process');
     const ACESTEP_DIR = process.env.ACESTEP_PATH || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../ACE-Step-1.5');
@@ -773,6 +801,24 @@ router.get('/debug/:taskId', authMiddleware, async (req: AuthenticatedRequest, r
 router.post('/format', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { caption, lyrics, bpm, duration, keyScale, timeSignature, temperature, topK, topP, lmModel, lmBackend } = req.body;
+
+    if (isYue2Engine()) {
+      // The "enhance" buttons become a lyrics writer: the lyrics box can hold a story, an idea, or draft lyrics
+      const text = String(lyrics || '').trim();
+      const isDraft = /\[(verse|chorus|bridge|outro|intro)/i.test(text);
+      if (!text && !caption) {
+        res.status(400).json({ error: 'Write a story or idea in the lyrics box first' });
+        return;
+      }
+      const written = await writeLyrics({
+        idea: isDraft ? 'Polish these lyrics.' : (text || caption),
+        style: caption,
+        existingLyrics: isDraft ? text : undefined,
+        language: req.body.vocalLanguage,
+      });
+      res.json({ caption: caption || written.style, lyrics: written.lyrics, title: written.title });
+      return;
+    }
 
     if (!caption) {
       res.status(400).json({ error: 'Caption/style is required' });
