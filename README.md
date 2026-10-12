@@ -16,6 +16,9 @@
   <a href="https://x.com/AmbsdOP">
     <img src="https://img.shields.io/badge/Follow-@AmbsdOP-1DA1F2?style=for-the-badge&logo=x&logoColor=white" alt="Follow on X">
   </a>
+  <a href="https://webdesignstudio.london">
+    <img src="https://img.shields.io/badge/Web_Design-webdesignstudio.london-d4ff00?style=for-the-badge&labelColor=000000" alt="Web Design Studio London">
+  </a>
 </p>
 
 <p align="center">
@@ -487,6 +490,38 @@ This is a community-driven project and contributions are what make open source a
   💡 Tips and tricks<br>
   🎵 AI music generation news
 </p>
+
+---
+
+## 💼 Need a Website Like This?
+
+If you like the engineering and design behind ACE-Step UI and want something similar built for your business, the same team offers professional web development services.
+
+**We build:**
+- 🌐 Custom websites & web apps — Next.js, Astro, WordPress, React
+- 🤖 AI integrations & automations — OpenAI, Anthropic, custom LLM workflows
+- 📱 Mobile apps — iOS, Android, React Native
+- 🎨 UI/UX design tailored to your brand
+
+<p align="center">
+  <a href="https://webdesignstudio.london">
+    <img src="https://img.shields.io/badge/Get_in_Touch-webdesignstudio.london-d4ff00?style=for-the-badge&labelColor=000000" alt="webdesignstudio.london">
+  </a>
+</p>
+
+<p align="center">
+  <em>From the makers of ACE-Step UI — we ship production-grade web experiences.</em>
+</p>
+
+---
+
+## 👤 About the Author
+
+ACE-Step UI is built and maintained by **Vali** — open-source developer and founder of [Web Design Studio London](https://webdesignstudio.london), a specialist web design and development studio serving London businesses and international clients.
+
+Web Design Studio London builds high-performance Next.js websites, ecommerce platforms, and AI-integrated web applications — the same technical approach that powers this project.
+
+If you need a professional website, ecommerce build, or AI integration for your business, visit [webdesignstudio.london](https://webdesignstudio.london).
 
 ---
 
