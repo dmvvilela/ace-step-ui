@@ -497,6 +497,11 @@ async function processGeneration(
   job.status = 'running';
   job.stage = 'Starting generation...';
 
+  // YuE2: a leftover cover task type with no source song is just a normal song
+  if (isYue2Engine() && (params.taskType === 'cover' || params.taskType === 'audio2audio') && !params.sourceAudioUrl) {
+    params.taskType = 'text2music';
+  }
+
   // Guard: cover/audio2audio requires a source or audio codes
   if ((params.taskType === 'cover' || params.taskType === 'audio2audio') && !params.sourceAudioUrl && !params.audioCodes) {
     job.status = 'failed';

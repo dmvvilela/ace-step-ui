@@ -236,6 +236,8 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
   
   // Available models fetched from backend
   const [fetchedModels, setFetchedModels] = useState<{ name: string; is_active: boolean; is_preloaded: boolean }[]>([]);
+  // YuE2 covers follow the source melody "close" (melody + structure) or "free" (main melody only)
+  const isYue2 = fetchedModels.some(m => m.name.startsWith('yue2'));
 
   // Fallback model list when backend is unavailable
   const availableModels = useMemo(() => {
@@ -1507,11 +1509,41 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
                     </div>
                     <button
                       type="button"
-                      onClick={() => { setSourceAudioUrl(''); setSourceAudioTitle(''); setSourcePlaying(false); setSourceTime(0); setSourceDuration(0); }}
+                      onClick={() => { setSourceAudioUrl(''); setSourceAudioTitle(''); setSourcePlaying(false); setSourceTime(0); setSourceDuration(0); if (['cover', 'audio2audio', 'repaint'].includes(taskType)) setTaskType('text2music'); }}
                       className="p-1.5 rounded-full hover:bg-zinc-200 dark:hover:bg-white/10 text-zinc-400 hover:text-zinc-600 dark:hover:text-white transition-colors"
                     >
                       <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/></svg>
                     </button>
+                  </div>
+                )}
+
+                {/* YuE2 cover melody mode */}
+                {audioTab === 'source' && sourceAudioUrl && isYue2 && (
+                  <div className="space-y-1.5">
+                    <div className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400">{t('referenceMelody')}</div>
+                    <div className="grid grid-cols-2 gap-2">
+                      {([
+                        { strength: 1.0, label: t('coverClose'), hint: t('coverCloseHint') },
+                        { strength: 0.3, label: t('coverFree'), hint: t('coverFreeHint') },
+                      ]).map(({ strength, label, hint }) => {
+                        const active = (audioCoverStrength >= 0.5) === (strength >= 0.5);
+                        return (
+                          <button
+                            key={label}
+                            type="button"
+                            onClick={() => setAudioCoverStrength(strength)}
+                            className={`text-left rounded-lg px-3 py-2 border transition-colors ${
+                              active
+                                ? 'border-emerald-500 bg-emerald-500/10 text-zinc-900 dark:text-white'
+                                : 'border-zinc-200 dark:border-white/10 text-zinc-500 dark:text-zinc-400 hover:border-zinc-300 dark:hover:border-white/20'
+                            }`}
+                          >
+                            <div className="text-xs font-semibold">{label}</div>
+                            <div className="text-[10px] opacity-80">{hint}</div>
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
                 )}
 
@@ -2234,7 +2266,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
                   <option value="repaint">{t('repaintTask')}</option>
                 </select>
               </div>
-              <div className="space-y-1.5">
+              {!isYue2 && <div className="space-y-1.5">
                 <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400" title="How strongly the source audio shapes the result.">{t('audioCoverStrength')}</label>
                 <input
                   type="number"
@@ -2245,7 +2277,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
                   onChange={(e) => setAudioCoverStrength(Number(e.target.value))}
                   className="w-full bg-zinc-50 dark:bg-black/20 border border-zinc-200 dark:border-white/10 rounded-lg px-3 py-2 text-xs text-zinc-900 dark:text-white focus:outline-none"
                 />
-              </div>
+              </div>}
             </div>
 
             <div className="grid grid-cols-2 gap-3">
