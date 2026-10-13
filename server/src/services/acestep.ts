@@ -22,6 +22,7 @@ import { fileURLToPath } from 'url';
 import { config } from '../config/index.js';
 import { getGradioClient, resetGradioClient, isGradioAvailable } from './gradio-client.js';
 import { writeLyrics, type WrittenLyrics } from './lyricsWriter.js';
+import { ensureAceServer, stopAceServer, scheduleAceIdleStop } from './aceServer.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -83,6 +84,8 @@ export const YUE2_DIR = process.env.YUE2_PATH || path.join(process.env.HOME || '
 const YUE2_PYTHON = path.join(YUE2_DIR, '.venv/bin/python');
 const YUE2_JOB_SCRIPT = path.join(YUE2_DIR, 'yue2_job.py');
 export const isYue2Engine = () => MUSIC_ENGINE === 'yue2';
+// Each song picks its engine from the model dropdown; with no model, fall back to MUSIC_ENGINE
+export const isYue2Model = (model?: string) => (model ? model.startsWith('yue2') : isYue2Engine());
 
 // ---------------------------------------------------------------------------
 // Gradio generation: map params to the 51 positional args for /generation_wrapper
@@ -380,7 +383,7 @@ let isProcessingQueue = false;
 
 // Health check - verify Gradio app is reachable
 export async function checkSpaceHealth(): Promise<boolean> {
-  if (isYue2Engine()) return existsSync(YUE2_PYTHON) && existsSync(YUE2_JOB_SCRIPT);
+  if (existsSync(YUE2_PYTHON) && existsSync(YUE2_JOB_SCRIPT)) return true;
   return isGradioAvailable();
 }
 
@@ -497,8 +500,10 @@ async function processGeneration(
   job.status = 'running';
   job.stage = 'Starting generation...';
 
+  const useYue2 = isYue2Model(params.ditModel);
+
   // YuE2: a leftover cover task type with no source song is just a normal song
-  if (isYue2Engine() && (params.taskType === 'cover' || params.taskType === 'audio2audio') && !params.sourceAudioUrl) {
+  if (useYue2 && (params.taskType === 'cover' || params.taskType === 'audio2audio') && !params.sourceAudioUrl) {
     params.taskType = 'text2music';
   }
 
@@ -509,25 +514,39 @@ async function processGeneration(
     return;
   }
 
-  if (isYue2Engine()) {
+  if (useYue2) {
+    stopAceServer(); // never hold both models in memory
     await processGenerationViaYue2(jobId, params, job);
     return;
   }
 
-  // Try Gradio first
-  const gradioUp = await isGradioAvailable();
-  if (gradioUp) {
-    try {
-      await processGenerationViaGradio(jobId, params, job);
-      return;
-    } catch (error) {
-      console.error(`Job ${jobId}: Gradio generation failed, trying Python spawn fallback`, error);
-      // Fall through to Python spawn
-    }
+  try {
+    await ensureAceServer(stage => { job.stage = stage; });
+  } catch (error) {
+    job.status = 'failed';
+    job.error = error instanceof Error ? error.message : 'Could not start ACE-Step';
+    return;
   }
+  try {
+    await runAceGeneration(jobId, params, job);
+  } finally {
+    scheduleAceIdleStop();
+  }
+}
 
-  // Fallback: Python spawn
-  await processGenerationViaPython(jobId, params, job);
+async function runAceGeneration(
+  jobId: string,
+  params: GenerationParams,
+  job: ActiveJob,
+): Promise<void> {
+  // The ACE server is up at this point; no Python-spawn fallback, which would load a second copy of the model
+  try {
+    await processGenerationViaGradio(jobId, params, job);
+  } catch (error) {
+    console.error(`Job ${jobId}: ACE-Step generation failed`, error);
+    job.status = 'failed';
+    job.error = error instanceof Error ? error.message : 'Generation failed';
+  }
 }
 
 async function processGenerationViaGradio(
@@ -1052,7 +1071,7 @@ export async function getJobStatus(jobId: string): Promise<JobStatus> {
   // Running — Gradio handles its own queue, we just report estimated time
   return {
     status: job.status,
-    etaSeconds: Math.max(0, (isYue2Engine() ? 90 : 180) - elapsed),
+    etaSeconds: Math.max(0, (isYue2Model(job.params.ditModel) ? 90 : 60) - elapsed),
     progress: job.progress,
     stage: job.stage,
   };

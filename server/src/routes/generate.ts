@@ -612,10 +612,8 @@ router.get('/endpoints', authMiddleware, async (_req: AuthenticatedRequest, res:
 });
 
 router.get('/models', async (_req, res: Response) => {
-  if (isYue2Engine()) {
-    res.json({ models: [{ name: YUE2_MODEL_NAME, is_active: true, is_preloaded: true }] });
-    return;
-  }
+  // YuE2 is always offered first; ACE-Step models follow when its checkpoints are installed
+  const yue2Model = { name: YUE2_MODEL_NAME, is_active: isYue2Engine(), is_preloaded: true };
   try {
     const ACESTEP_DIR = process.env.ACESTEP_PATH || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../ACE-Step-1.5');
     const checkpointsDir = path.join(ACESTEP_DIR, 'checkpoints');
@@ -674,10 +672,10 @@ router.get('/models', async (_req, res: Response) => {
       }
     } catch { /* checkpoints dir may not exist */ }
 
-    const models = ALL_DIT_MODELS.map(name => ({
+    const models = ALL_DIT_MODELS.filter(name => downloaded.has(name)).map(name => ({
       name,
-      is_active: name === activeModel,
-      is_preloaded: downloaded.has(name),
+      is_active: !isYue2Engine() && name === activeModel,
+      is_preloaded: true,
     }));
 
     // Sort: active first, then downloaded, then alphabetical
@@ -687,7 +685,7 @@ router.get('/models', async (_req, res: Response) => {
       return a.name.localeCompare(b.name);
     });
 
-    res.json({ models });
+    res.json({ models: [yue2Model, ...models] });
   } catch (error) {
     console.error('Models error:', error);
     res.status(500).json({ error: (error as Error).message });

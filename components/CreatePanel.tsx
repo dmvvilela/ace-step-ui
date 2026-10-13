@@ -237,7 +237,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
   // Available models fetched from backend
   const [fetchedModels, setFetchedModels] = useState<{ name: string; is_active: boolean; is_preloaded: boolean }[]>([]);
   // YuE2 covers follow the source melody "close" (melody + structure) or "free" (main melody only)
-  const isYue2 = fetchedModels.some(m => m.name.startsWith('yue2'));
+  const isYue2 = selectedModel.startsWith('yue2');
 
   // Fallback model list when backend is unavailable
   const availableModels = useMemo(() => {
@@ -257,6 +257,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
   // Map model ID to short display name
   const getModelDisplayName = (modelId: string): string => {
     const mapping: Record<string, string> = {
+      'yue2-3b-mlx-8bit': 'YuE2',
       'acestep-v15-base': '1.5B',
       'acestep-v15-sft': '1.5S',
       'acestep-v15-turbo-shift1': '1.5TS1',
@@ -564,8 +565,9 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
         const models = data.models || [];
         if (models.length > 0) {
           setFetchedModels(models);
-          // Always sync to the backend's active model
-          const active = models.find((m: any) => m.is_active);
+          // Keep the user's pick if it's still offered, otherwise sync to the backend's active model
+          const saved = localStorage.getItem('ace-model');
+          const active = models.some((m: any) => m.name === saved) ? null : models.find((m: any) => m.is_active);
           if (active) {
             setSelectedModel(active.name);
             localStorage.setItem('ace-model', active.name);
